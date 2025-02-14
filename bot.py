@@ -1,143 +1,129 @@
-import os
-import sqlite3
 from flask import Flask, request
 import telebot
+import sqlite3
+import os
 
-# Временно указываем токен напрямую
-TOKEN = "7840228365:AAGdBlBeeao5g0l9JT369Pz6h3qRN2T_38c"  # Вставьте сюда свой токен
-# Если всё работает, верните обратно использование os.getenv
-# TOKEN = os.getenv("BOT_TOKEN")
-
+# Переменная окружения для токена
+TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# Создаем Flask-приложение
+# Flask-приложение
 app = Flask(__name__)
 
-# Инициализация базы данных
-def init_db():
-    conn = sqlite3.connect("clients.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            full_name TEXT,
-            gender TEXT,
-            age_group TEXT
-        )
-    """)
-    conn.commit()
-    return conn, cursor
+# Подключение к базе данных
+conn = sqlite3.connect("clients.db", check_same_thread=False)
+cursor = conn.cursor()
 
-conn, cursor = init_db()
+# Создание таблицы клиентов
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        full_name TEXT,
+        gender TEXT,
+        age_group TEXT,
+        used_before TEXT
+    )
+""")
+conn.commit()
 
-# Начало регистрации
-@bot.message_handler(commands=["start", "register"])
-def start_registration(message):
-    user_id = message.chat.id
+# Словарь для временного хранения данных клиента
+user_data = {}
+
+# Обработчик команды /start
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+
+    # Проверяем, есть ли пользователь в базе
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    if cursor.fetchone():
-        bot.send_message(user_id, "Вы уже зарегистрированы!")
+    user = cursor.fetchone()
+
+    if user:
+        bot.send_message(message.chat.id, "Вы уже зарегистрированы!")
     else:
-        bot.send_message(user_id, "Здравствуйте! Как вас зовут?")
-        bot.register_next_step_handler(message, ask_name)
+        user_data[user_id] = {"username": username, "full_name": full_name}
+        bot.send_message(message.chat.id, "Привет! Как вас зовут?")
+        bot.register_next_step_handler(message, get_gender)
 
-def ask_name(message):
-    full_name = message.text
-    user_id = message.chat.id
-    username = message.chat.username
-    bot.send_message(user_id, "Укажите ваш возрастной диапазон:", reply_markup=age_keyboard())
-    bot.register_next_step_handler(message, lambda msg: ask_age(msg, full_name, username))
+# Запрашиваем пол
+def get_gender(message):
+    user_id = message.from_user.id
+    user_data[user_id]["full_name"] = message.text
 
-def ask_age(message, full_name, username):
-    age_group = message.text
-    if age_group not in ["18-21", "22-26", "27-32"]:
-        bot.send_message(message.chat.id, "Пожалуйста, выберите возраст из предложенных вариантов.")
-        bot.register_next_step_handler(message, lambda msg: ask_age(msg, full_name, username))
-        return
+    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add("Мужской", "Женский")
+    bot.send_message(message.chat.id, "Укажите ваш пол:", reply_markup=markup)
+    bot.register_next_step_handler(message, get_age)
 
-    bot.send_message(message.chat.id, "Укажите ваш пол:", reply_markup=gender_keyboard())
-    bot.register_next_step_handler(message, lambda msg: ask_gender(msg, full_name, username, age_group))
-
-def ask_gender(message, full_name, username, age_group):
+# Запрашиваем возрастную группу
+def get_age(message):
+    user_id = message.from_user.id
     gender = message.text
+
     if gender not in ["Мужской", "Женский"]:
-        bot.send_message(message.chat.id, "Пожалуйста, выберите пол из предложенных вариантов.")
-        bot.register_next_step_handler(message, lambda msg: ask_gender(msg, full_name, username, age_group))
-        return
+        bot.send_message(message.chat.id, "Пожалуйста, выберите 'Мужской' или 'Женский' с помощью кнопок.")
+        return get_gender(message)
+
+    user_data[user_id]["gender"] = gender
+
+    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add("18-21", "21-26", "26-32", "32+")
+    bot.send_message(message.chat.id, "Укажите вашу возрастную группу:", reply_markup=markup)
+    bot.register_next_step_handler(message, set_used_before)
+
+# Запрашиваем, пользовались ли услугами магазина
+def set_used_before(message):
+    user_id = message.from_user.id
+    age_group = message.text
+
+    if age_group not in ["18-21", "21-26", "26-32", "32+"]:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите возрастную группу с помощью кнопок.")
+        return get_age(message)
+
+    user_data[user_id]["age_group"] = age_group
+
+    markup = telebot.types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add("Да", "Нет")
+    bot.send_message(message.chat.id, "Вы пользовались услугами магазина ранее?", reply_markup=markup)
+    bot.register_next_step_handler(message, save_to_db)
+
+# Сохраняем данные в базу
+def save_to_db(message):
+    user_id = message.from_user.id
+    used_before = message.text
+
+    if used_before not in ["Да", "Нет"]:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите 'Да' или 'Нет' с помощью кнопок.")
+        return set_used_before(message)
+
+    user_data[user_id]["used_before"] = used_before
 
     # Сохраняем данные в базу
-    cursor.execute("INSERT INTO users (user_id, username, full_name, gender, age_group) VALUES (?, ?, ?, ?, ?)",
-                   (message.chat.id, username, full_name, gender, age_group))
+    data = user_data[user_id]
+    cursor.execute("""
+        INSERT INTO users (user_id, username, full_name, gender, age_group, used_before)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_id, data["username"], data["full_name"], data["gender"], data["age_group"], data["used_before"]))
     conn.commit()
 
-    bot.send_message(message.chat.id, "Спасибо за регистрацию! Ваши данные сохранены.")
+    bot.send_message(message.chat.id, "Спасибо за регистрацию!")
 
-# Отправка количества клиентов
-@bot.message_handler(commands=["count_clients"])
-def count_clients(message):
-    cursor.execute("SELECT COUNT(*) FROM users")
-    count = cursor.fetchone()[0]
-    bot.send_message(message.chat.id, f"Количество зарегистрированных клиентов: {count}")
-
-# Очистка базы (только для администратора)
-@bot.message_handler(commands=["clear_db"])
-def clear_database(message):
-    if message.chat.id == ADMIN_ID:  # Укажите ваш ID администратора
-        cursor.execute("DELETE FROM users")
-        conn.commit()
-        bot.send_message(message.chat.id, "База данных успешно очищена.")
-    else:
-        bot.send_message(message.chat.id, "У вас нет прав для выполнения этой команды.")
-
-# Рассылка сообщений всем клиентам
-@bot.message_handler(commands=["broadcast"])
-def broadcast_message(message):
-    if message.chat.id == 641521378:  # Укажите ваш ID администратора
-        bot.send_message(message.chat.id, "Введите текст для рассылки:")
-        bot.register_next_step_handler(message, send_broadcast)
-    else:
-        bot.send_message(message.chat.id, "У вас нет прав для выполнения этой команды.")
-
-def send_broadcast(message):
-    text = message.text
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-    for user in users:
-        try:
-            bot.send_message(user[0], text)
-        except Exception as e:
-            print(f"Не удалось отправить сообщение пользователю {user[0]}: {e}")
-    bot.send_message(message.chat.id, "Рассылка завершена.")
-
-# Клавиатуры для опроса
-def age_keyboard():
-    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    keyboard.add("18-21", "22-26", "27-32")
-    return keyboard
-
-def gender_keyboard():
-    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    keyboard.add("Мужской", "Женский")
-    return keyboard
-
-# Роут для обработки вебхуков
-@app.route(f"/{TOKEN}", methods=["POST"])
+# Обработчик Webhook
+@app.route('/', methods=['POST'])
 def webhook():
-    json_string = request.get_data().decode("utf-8")
+    json_string = request.get_data().decode('utf-8')
     update = telebot.types.Update.de_json(json_string)
     bot.process_new_updates([update])
-    return "!", 200
+    return 'OK', 200
 
-# Устанавливаем вебхук и запускаем Flask
+# Запуск приложения
 if __name__ == "__main__":
     bot.remove_webhook()
-
-    # Указываем Railway-домен для вебхука
-    webhook_url = f"https://worker-production-fb4c.up.railway.app/{TOKEN}"  # Укажите ваш Railway-домен
+    webhook_url = f"https://{os.getenv('RAILWAY_STATIC_URL')}/{TOKEN}"
     bot.set_webhook(url=webhook_url)
 
-    # Railway автоматически передаёт порт в переменной окружения PORT
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
