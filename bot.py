@@ -1,12 +1,12 @@
 import os
-import telebot
 import sqlite3
 from flask import Flask, request
+import telebot
 
-# Получаем токен из переменной окружения
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("Необходимо указать токен в переменной окружения BOT_TOKEN")
+# Временно указываем токен напрямую
+TOKEN = "7840228365:AAGdBlBeeao5g0l9JT369Pz6h3qRN2T_38c"  # Вставьте сюда свой токен
+# Если всё работает, верните обратно использование os.getenv
+# TOKEN = os.getenv("BOT_TOKEN")
 
 bot = telebot.TeleBot(TOKEN)
 
