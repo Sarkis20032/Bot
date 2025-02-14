@@ -132,8 +132,12 @@ def webhook():
 # Устанавливаем вебхук и запускаем Flask
 if __name__ == "__main__":
     bot.remove_webhook()
-    webhook_url = f"https://ваш-домен.herokuapp.com/{TOKEN}"  # Укажите ваш домен на Heroku
+
+    # Указываем Railway-домен для вебхука
+    webhook_url = f"https://worker-production-fb4c.up.railway.app/{TOKEN}"  # Укажите ваш Railway-домен
     bot.set_webhook(url=webhook_url)
 
-    port = int(os.environ.get("PORT", 5000))
+    # Railway автоматически передаёт порт в переменной окружения PORT
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
